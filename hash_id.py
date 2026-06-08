@@ -164,3 +164,85 @@ def identify(raw_input: str) -> list[hashCandidate]:
                     reason = "user::domain:challenge:nt(48 hex): blob shape",
                 )
             ]
+        
+        if _is_mysql5(text):
+            return [
+                hashCandidate(
+                    alorithm = "MySQL5",
+                    confidence = "high",
+                    reason = "MySQL5 format: `*` followed by 40 uppercase hex chars",
+                )
+            ]
+        
+        if _is_descypt(text):
+            return [
+                hashCandidate(
+                    alorithm = "DES crypt",
+                    confidence = "high",
+                    reason = "Traditional 13-char DES crypt format",
+                )
+            ]
+        
+        if _is_hex(text):
+            algorithms = Hex_LENGTH_RULES.get(len(text), [])
+            candidates: list[hashCandidate] = []
+            for index, algorithms in enumerate(algorithms):
+                # The first listed algorithm for each length is the modern default
+                confidence: Confidence = "medium" if index == 0 else "low"
+                label = (
+                    "most likely candidate at this length"
+                    if index == 0 else "also possible at this length"
+                )
+                candidates.append(
+                    hashCandidate(
+                        algorithm = alorithm,
+                        confidence = confidence,
+                        reason = f"{len(text)} hex chars - {label}"
+                     )
+                )
+            return candidates
+
+# ===================================================
+# generic PHC string fallback
+# ===================================================    
+
+        if text.startswith("$"):
+            rest = text[1 :]
+            if "$" in rest:
+                algo_name = rest.split("$", 1)[0]
+                if algo_name and all(c.isalnum() or c in "-_"
+                                     for c in algo_name):
+                    return [
+                        hashCandidate(
+                            alorithm = f"PHC string ({algo_name})",
+                            confidence = "low",
+                            reason = f"`${algo_name}$...`shape - generic PHC, no specific rule",
+                            )
+                    ]
+                
+# ===================================================
+# not-a-hash shape gints
+# ===================================================
+
+    # JWTs
+    if text.startswith("eyJ"):
+        # JWTs always stars with `eyJ`
+        return[
+            hashCandidate(
+                alorithm = "JWT (not a hash)",
+                confidence = "low",
+                reason = "leading `eyJ` is base64 of `{\}` - JWT, not a hash"
+            )
+        ]
+    
+    if any(c in text for c in "+/=") and len(text) > 8:
+        # Hex hashes never contain `+`, `/` or `=`
+        return [
+            hashCandidate(
+                alorithm = "Base64 blob (not a hash)",
+                confidence = "low",
+                reason = "contains base64-only chars (`+`, `/`, =)",
+            )
+        ]
+    
+    return []
