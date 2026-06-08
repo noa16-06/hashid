@@ -15,7 +15,7 @@ class hashCandidate:
     confidence: Confidence
     reason: str
 
-PREFIX_RULES: list[tuple[str, str, str]] = {
+PREFIX_RULES: list[tuple[str, str, str]] = [
     # Argon 2 family
     ("$argon2id$", "Argon2id", "modern PHC string, the current standard")
     ("$argon2i$", "Argon2i", "PHC string, side-channel-resistant variant"),
@@ -60,4 +60,107 @@ PREFIX_RULES: list[tuple[str, str, str]] = {
     ("{SMD5}", "LDAP SMD5", "LDAP salted MD5 (base64 payload)"),
     ("{MD5}", "LDAP MD5", "LDAP MD5 (base64 payload)"),
     ("{CRYPT}", "LDAP CRYPT", "LDAP wrapping a crypt(3) hash"),
-} 
+
+]
+
+HEX_CHARSET: frozenset[str] = frozenset("0123456789abcdefABCDEF")
+
+_HEX_UPPER_CHARSET: frozenset[str] = frozenset("0123456789ABCDEF")
+
+Hex_LENGTH_RULES: dict[int, list[str]] = {
+    # 16 hex chars = 8 bytes = 64 bits
+    16: ["MySQL323", "CRC-64"],
+    # 32 hex chars = 16 bytes = 128 bits
+    32: ["MD5", "NTLM", "MD4", "RIPEMD-128"],
+    # 40 hex chars = 20 bytes = 160 bits
+    40: ["SHA-1", "RIPEMD-160"],
+    # 48 hex chars = 24 bytes = 192 bits
+    48: ["Tiger-192"],
+    # 56 hex chars = 28 bytes = 224 bits
+    56: ["SHA-224", "SHA3-224"],
+    # 64 hex chars = 32 bytes = 256 bits
+    64: ["SHA-256", "SHA3-256", "RIPEMD-256"],
+    # 80 hex chars = 40 bytes = 320 bits (uncommon)
+    80: ["RIPEMD-320"],
+    # 96 hex chars = 48 bytes = 384 bits
+    96: ["SHA-384", "SHA3-384"],
+    # 128 hex chars = 64 bytes = 512 bits
+    128: ["SHA-512", "SHA3-512", "BLAKE2b-512", "Whirlpool"],
+
+}
+
+# ===================================================
+# Helpers
+# ===================================================
+
+def _is_hex(text: str) -> bool:
+    # Return True if every character in text is a hex digit and text is non-empty
+    return bool(text) and all(c in HEX_CHARSET for c in text)
+
+_MYSQL5_HEX_BODY_LENGTH = 40
+_MYSQL5_TOTAL_LENGTH = _MYSQL5_HEX_BODY_LENGTH + 1
+
+def _is_mysql5(text: str) -> bool:
+    # Return True for MySQL5 password format: `*` then 40 UPERCASE hex chars
+    if len(text) != _MYSQL5_TOTAL_LENGTH or not text.startswith("*"):
+        return False
+    body = text[1 :]
+    return all(c in _HEX_UPPER_CHARSET for c in body)
+
+
+_DESCYPT_CHARSET: frozenset[str] = frozenset(
+    "./0123456789"
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    "abcdefghijklmnopqrstuvwxyz"
+)
+_DESCYPT_TOTAL_LENGHT: 13
+
+def _is_descypt(text: str) -> bool:
+    # Return True for traditional 13-char DES crypt
+    return (
+        len(text) == _DESCYPT_TOTAL_LENGHT
+        and all(c in _DESCYPT_CHARSET for c in text)
+    )
+
+# ===================================================
+# The actual identifier
+# ===================================================
+
+def identify(raw_input: str) -> list[hashCandidate]:
+    text = raw_input.strip()
+
+    if not text:
+        return []
+    
+    for prefix, alorithm, note in PREFIX_RULES:
+        if text.startswith(prefix):
+            return [
+                hashCandidate(
+                    alorithm = alorithm,
+                    confidence = "high",
+                    reasson = f"prefix `{prefix} - {note}`",
+                )
+            ]
+        
+    if "::" in text and text.count(":") >= 4:
+        parts = text.split(":")
+        # NetNTLMv2 layout
+        # user :: domain : challenge : hmac(32 hex) : blob(>=32 hex)
+        if (len(parts) >= 6 and len(parts[4]) == 32 and _is_hex(parts[4])):
+            return [
+                hashCandidate(
+                    alorithm = "NetNTLMv2",
+                    confidence = "high",
+                    reason = "user::domain:challenge:hmac(32 hex):blob shape"
+                )
+            ]
+        # NetNTLMv1 layout:
+        # user :: domain : lmhash(48 hex) : nthash(48 hex) : challenge
+        if (len(parts) >= 6 and len(parts[3]) == 48 and _is_hex(parts[3])):
+            return [
+                hashCandidate(
+                    alorithm = "NetNTLMv1",
+                    confidence = "high",
+                    reason = "user::domain:challenge:nt(48 hex): blob shape",
+                )
+            ]
