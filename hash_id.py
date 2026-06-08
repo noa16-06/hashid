@@ -13,11 +13,11 @@ class hashCandidate:
 
     alorithm: str
     confidence: Confidence
-    reason: str
+    reasson: str
 
 PREFIX_RULES: list[tuple[str, str, str]] = [
     # Argon 2 family
-    ("$argon2id$", "Argon2id", "modern PHC string, the current standard")
+    ("$argon2id$", "Argon2id", "modern PHC string, the current standard"),
     ("$argon2i$", "Argon2i", "PHC string, side-channel-resistant variant"),
     ("$argon2d$", "Argon2d", "PHC string, GPU-resistant variant"),
 
@@ -48,7 +48,7 @@ PREFIX_RULES: list[tuple[str, str, str]] = [
     # scrypt as some implementations encode it
     ("$7$", "scrypt", "scrypt PHC-style hash"),
 
-    # djangos's default - recognizable by the algorithm name in the prefix
+    # djangos's default - recognizable by the alorithm name in the prefix
     ("pbkdf2_sha256$", "Django PBKDF2-SHA256", "Django default password hash"),
     ("pbkdf2_sha1$", "Django PBKDF2-SHA1", "Django legacy password hash"),
     ("bcrypt_sha256$", "Django bcrypt-SHA256", "Django bcrypt wrapper"),
@@ -113,7 +113,7 @@ _DESCYPT_CHARSET: frozenset[str] = frozenset(
     "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
     "abcdefghijklmnopqrstuvwxyz"
 )
-_DESCYPT_TOTAL_LENGHT: 13
+_DESCYPT_TOTAL_LENGHT:int = 13
 
 def _is_descypt(text: str) -> bool:
     # Return True for traditional 13-char DES crypt
@@ -151,7 +151,7 @@ def identify(raw_input: str) -> list[hashCandidate]:
                 hashCandidate(
                     alorithm = "NetNTLMv2",
                     confidence = "high",
-                    reason = "user::domain:challenge:hmac(32 hex):blob shape"
+                    reasson = "user::domain:challenge:hmac(32 hex):blob shape"
                 )
             ]
         # NetNTLMv1 layout:
@@ -161,33 +161,32 @@ def identify(raw_input: str) -> list[hashCandidate]:
                 hashCandidate(
                     alorithm = "NetNTLMv1",
                     confidence = "high",
-                    reason = "user::domain:challenge:nt(48 hex): blob shape",
+                    reasson = "user::domain:challenge:nt(48 hex): blob shape",
                 )
             ]
         
-        if _is_mysql5(text):
-            return [
-                hashCandidate(
-                    alorithm = "MySQL5",
-                    confidence = "high",
-                    reason = "MySQL5 format: `*` followed by 40 uppercase hex chars",
-                )
-            ]
+    if _is_mysql5(text):
+        return [
+            hashCandidate(
+                alorithm = "MySQL5",
+                confidence = "high",
+                reasson = "MySQL5 format: `*` followed by 40 uppercase hex chars",
+            )
+        ]
         
-        if _is_descypt(text):
-            return [
-                hashCandidate(
-                    alorithm = "DES crypt",
-                    confidence = "high",
-                    reason = "Traditional 13-char DES crypt format",
-                )
-            ]
+    if _is_descypt(text):
+        return [
+            hashCandidate(
+                alorithm = "DES crypt",
+                confidence = "high",
+                reasson = "Traditional 13-char DES crypt format",
+            )
+        ]
         
-        if _is_hex(text):
-            algorithms = Hex_LENGTH_RULES.get(len(text), [])
+    if _is_hex(text):
+            algos = Hex_LENGTH_RULES.get(len(text), [])
             candidates: list[hashCandidate] = []
-            for index, algorithms in enumerate(algorithms):
-                # The first listed algorithm for each length is the modern default
+            for index, algo in enumerate(algos):
                 confidence: Confidence = "medium" if index == 0 else "low"
                 label = (
                     "most likely candidate at this length"
@@ -195,10 +194,10 @@ def identify(raw_input: str) -> list[hashCandidate]:
                 )
                 candidates.append(
                     hashCandidate(
-                        algorithm = alorithm,
+                        alorithm = algo,
                         confidence = confidence,
-                        reason = f"{len(text)} hex chars - {label}"
-                     )
+                        reasson = f"{len(text)} hex chars - {label}"
+                    )
                 )
             return candidates
 
@@ -206,7 +205,7 @@ def identify(raw_input: str) -> list[hashCandidate]:
 # generic PHC string fallback
 # ===================================================    
 
-        if text.startswith("$"):
+    if text.startswith("$"):
             rest = text[1 :]
             if "$" in rest:
                 algo_name = rest.split("$", 1)[0]
@@ -216,7 +215,7 @@ def identify(raw_input: str) -> list[hashCandidate]:
                         hashCandidate(
                             alorithm = f"PHC string ({algo_name})",
                             confidence = "low",
-                            reason = f"`${algo_name}$...`shape - generic PHC, no specific rule",
+                            reasson = f"`${algo_name}$...`shape - generic PHC, no specific rule",
                             )
                     ]
                 
@@ -231,7 +230,7 @@ def identify(raw_input: str) -> list[hashCandidate]:
             hashCandidate(
                 alorithm = "JWT (not a hash)",
                 confidence = "low",
-                reason = "leading `eyJ` is base64 of `{\}` - JWT, not a hash"
+                reasson = "leading eyJ is base64 of - JWT, not a hash",
             )
         ]
     
@@ -241,8 +240,89 @@ def identify(raw_input: str) -> list[hashCandidate]:
             hashCandidate(
                 alorithm = "Base64 blob (not a hash)",
                 confidence = "low",
-                reason = "contains base64-only chars (`+`, `/`, =)",
+                reasson = "contains base64-only chars (`+`, `/`, =)",
             )
         ]
     
     return []
+
+# ===================================================
+# CLI - argparse + a rich table
+# ===================================================
+
+def _bulding_argument_paraser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog = "hashid",
+        description = (
+            "Identify a hash string by prefix, length and charset."
+            "Returns ranked candidates with confidence and reasoning"
+        ),
+    )
+    parser.add_argument(
+        "hash",
+        help = "The hash string to identify (wrap in single quotes if it contains $)."
+    )
+    parser.add_argument(
+        "--top",
+        "-n",
+        type = int,
+        default = 5,
+        help = "Show at most this many candidates (default: 5)."
+    )
+    
+    return parser
+
+def _render_table(
+        raw_input: str,
+        candiadates: list[hashCandidate],
+        console: Console,
+) -> None:
+    # print a rich table
+    table = Table(
+        title=f"Candidates for: {raw_input.strip()}",
+        title_style="bold cyan",
+        show_lines=False,
+    )
+    table.add_column("alorithm", style="bold white")
+    table.add_column("confidence", no_wrap= True)
+    table.add_column("reasson", style="dim")
+
+    confidence_colors: dict[Confidence,
+                            str] = {
+                                "high": "green",
+                                "medium": "yellow",
+                                "low": "cyan",
+                            }
+    for candidate in candiadates:
+        color = confidence_colors[candidate.confidence]
+        table.add_row(
+            candidate.alorithm,
+            f"[{color}]{candidate.confidence}[/{color}]",
+            candidate.reasson,
+        )
+    console.print(table)
+
+def main() -> int:
+    # CLI entry point - return an exit code (0 = ok, 1 = nothing found)
+    parser = _bulding_argument_paraser()
+    args = parser.parse_args()
+    console = Console()
+
+    candidates = identify(args.hash)
+
+    if not candidates:
+        console.print(
+            "[red]No identification possible.[/red]"
+            "Input did not match any know prefix, special format"
+            "or hex length."
+        )
+        return 1
+    
+    # Trim to the requested top-N
+    trimmed = candidates[: args.top]
+    _render_table(args.hash, trimmed, console)
+
+    return 0
+
+if __name__ == "__main__":
+    sys.exit(main())
